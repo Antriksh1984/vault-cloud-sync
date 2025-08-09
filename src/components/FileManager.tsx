@@ -17,7 +17,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
   const [binFiles, setBinFiles] = useState<string[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
-  const [currentPath, setCurrentPath] = useState(''); // For folder navigation
+  const [currentPath, setCurrentPath] = useState('');
 
   // Helper: Clean file key for display (remove public/{user_id}/ prefix)
   const cleanFileKey = (key: string, userId: string) => {
@@ -56,6 +56,9 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
       if (fileKey) {
         queryParams.append('file', encodeURIComponent(fileKey));
       }
+      if (body?.contentType) {
+        queryParams.append('contentType', encodeURIComponent(body.contentType));
+      }
 
       const apiFn = method === 'GET' ? get : post;
       const response = await apiFn({
@@ -66,18 +69,24 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json'
           },
-          ...(body ? { body } : {})
+          ...(body && method === 'POST' ? { body } : {})
         }
       }).response;
 
-      return await response.body.json();
+      const data = await response.body.json();
+      if (response.statusCode >= 400) {
+        throw new Error(data || 'API request failed');
+      }
+      return data;
     } catch (error: any) {
-      throw new Error(error.message || 'Failed to communicate with the server.');
+      console.error('API call error:', error);
+      throw new Error(error.message || 'Failed to communicate with the server. Please check your network or API configuration.');
     }
   };
 
   // Fetch Files and Folders
   const fetchFiles = async () => {
+    setLoading(true);
     try {
       const user = await getCurrentUser();
       const response = await apiCall('list', currentPath);
@@ -85,17 +94,22 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
       setFolders((response?.folders || []).map((key: string) => cleanFileKey(key, user.username)));
     } catch (error: any) {
       onMessage(`Failed to fetch files: ${error.message}`);
+    } finally {
+      setLoading(false);
     }
   };
 
   // Fetch Bin
   const fetchBinFiles = async () => {
+    setLoading(true);
     try {
       const user = await getCurrentUser();
       const response = await apiCall('list', 'bin/');
       setBinFiles((response?.files || []).map((key: string) => cleanBinFileKey(key, user.username)));
     } catch (error: any) {
       onMessage(`Failed to fetch bin: ${error.message}`);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -124,7 +138,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
       await Promise.all(
         acceptedFiles.map(async (file) => {
           const fileKey = currentPath ? `${currentPath}${file.name}` : file.name;
-          const response = await apiCall('generate_upload_url', fileKey, 'GET', null, {
+          const response = await apiCall('generate_upload_url', fileKey, 'GET', {
             contentType: file.type || 'application/octet-stream'
           });
           const { uploadURL } = response;
@@ -244,8 +258,16 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
   });
 
   useEffect(() => {
-    fetchFiles();
-    fetchBinFiles();
+    const initialize = async () => {
+      try {
+        await getCurrentUser();
+        await Promise.all([fetchFiles(), fetchBinFiles()]);
+      } catch (error) {
+        onMessage('Please sign in to access files');
+        onAuthChange();
+      }
+    };
+    initialize();
   }, [currentPath]);
 
   return (
@@ -285,6 +307,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
           onChange={(e) => setFolderName(e.target.value)}
           placeholder="New folder name"
           className="flex-1 px-4 py-2 border rounded-lg"
+          disabled={loading}
         />
         <button
           onClick={createFolder}
@@ -321,7 +344,9 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
       {/* Folders List */}
       <div className="mt-6">
         <h2 className="font-semibold mb-2">My Folders</h2>
-        {folders.length === 0 ? (
+        {loading ? (
+          <p className="text-gray-500">Loading...</p>
+        ) : folders.length === 0 ? (
           <p className="text-gray-500">No folders found</p>
         ) : (
           folders.map((folder) => (
@@ -342,7 +367,9 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
       {/* Files List */}
       <div className="mt-6">
         <h2 className="font-semibold mb-2">My Files</h2>
-        {files.length === 0 ? (
+        {loading ? (
+          <p className="text-gray-500">Loading...</p>
+        ) : files.length === 0 ? (
           <p className="text-gray-500">No files found</p>
         ) : (
           files.map((file) => (
@@ -365,12 +392,14 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
                 <button
                   onClick={() => handleDownload(file)}
                   className="bg-green-500 p-2 rounded text-white"
+                  disabled={loading}
                 >
                   <Download className="w-4 h-4" />
                 </button>
                 <button
                   onClick={() => moveToBin(file)}
                   className="bg-red-500 p-2 rounded text-white"
+                  disabled={loading}
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -383,7 +412,9 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
       {/* Bin */}
       <div className="mt-8">
         <h2 className="font-semibold mb-2">Recycle Bin</h2>
-        {binFiles.length === 0 ? (
+        {loading ? (
+          <p className="text-gray-500">Loading...</p>
+        ) : binFiles.length === 0 ? (
           <p className="text-gray-500">Bin is empty</p>
         ) : (
           binFiles.map((file) => (
@@ -395,6 +426,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
               <button
                 onClick={() => restoreFromBin(file)}
                 className="bg-yellow-500 p-2 rounded text-white"
+                disabled={loading}
               >
                 <RotateCcw className="w-4 h-4" />
               </button>
