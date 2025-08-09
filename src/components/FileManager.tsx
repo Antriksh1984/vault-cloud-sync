@@ -31,21 +31,30 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
     return key.startsWith(prefix) ? key.slice(prefix.length) : key;
   };
 
-  // Helper: API call with auth token
+  // Helper: Validate folder name
+  const validateFolderName = (name: string) => {
+    if (!name.trim()) return 'Folder name cannot be empty';
+    if (name.includes('/') || name.includes('..') || name.includes('\\')) {
+      return 'Folder name cannot contain /, \\, or ..';
+    }
+    return null;
+  };
+
+  // Helper: API call with auth token and retry logic
   const apiCall = async (
     action: string,
     fileKey?: string,
     method: 'GET' | 'POST' = 'GET',
     body?: any,
-    retries = 2
-  ) => {
+    retries = 3
+  ): Promise<any> => {
     try {
       const session = await fetchAuthSession();
       const token = session.tokens?.idToken?.toString();
 
       if (!token) {
         if (retries > 0) {
-          console.warn(`No auth token yet. Retrying API call: ${action}`);
+          console.warn(`No auth token yet. Retrying API call: ${action}, retries left: ${retries}`);
           await new Promise((res) => setTimeout(res, 1000));
           return apiCall(action, fileKey, method, body, retries - 1);
         }
@@ -60,6 +69,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
         queryParams.append('contentType', encodeURIComponent(body.contentType));
       }
 
+      console.log(`Making ${method} request to /file?${queryParams.toString()}`);
       const apiFn = method === 'GET' ? get : post;
       const response = await apiFn({
         apiName: 'CV_v1',
@@ -74,13 +84,19 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
       }).response;
 
       const data = await response.body.json();
+      console.log(`Response for ${action}:`, data, `Status: ${response.statusCode}`);
       if (response.statusCode >= 400) {
-        throw new Error(data || 'API request failed');
+        throw new Error(data || `API request failed with status ${response.statusCode}`);
       }
       return data;
     } catch (error: any) {
-      console.error('API call error:', error);
-      throw new Error(error.message || 'Failed to communicate with the server. Please check your network or API configuration.');
+      console.error(`API call error for ${action}:`, error);
+      if ((error.message.includes('Network Error') || error.message.includes('Failed to fetch')) && retries > 0) {
+        console.warn(`Network error on ${action}. Retrying, retries left: ${retries}`);
+        await new Promise((res) => setTimeout(res, 1000));
+        return apiCall(action, fileKey, method, body, retries - 1);
+      }
+      throw new Error(error.message || 'Failed to communicate with the server.');
     }
   };
 
@@ -115,14 +131,16 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
 
   // Create Folder
   const createFolder = async () => {
-    if (!folderName.trim()) return onMessage('Folder name cannot be empty');
+    const validationError = validateFolderName(folderName);
+    if (validationError) return onMessage(validationError);
     setLoading(true);
     try {
       const folderPath = currentPath ? `${currentPath}${folderName}` : folderName;
+      console.log(`Creating folder: ${folderPath}`);
       await apiCall('create_folder', folderPath, 'POST');
       onMessage(`Folder "${folderName}" created`);
       setFolderName('');
-      fetchFiles();
+      await fetchFiles();
     } catch (error: any) {
       onMessage(`Folder creation failed: ${error.message}`);
     } finally {
@@ -142,7 +160,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
             contentType: file.type || 'application/octet-stream'
           });
           const { uploadURL } = response;
-
+          console.log(`Uploading to: ${uploadURL}`);
           await fetch(uploadURL, {
             method: 'PUT',
             headers: { 'Content-Type': file.type || 'application/octet-stream' },
@@ -151,7 +169,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
         })
       );
       onMessage(`Uploaded ${acceptedFiles.length} file(s)`);
-      fetchFiles();
+      await fetchFiles();
     } catch (error: any) {
       onMessage(`Upload failed: ${error.message}`);
     } finally {
@@ -210,8 +228,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
       const moveKey = currentPath ? `${currentPath}${fileKey}` : fileKey;
       await apiCall('move_to_bin', moveKey, 'POST');
       onMessage(`Moved "${fileKey}" to bin`);
-      fetchFiles();
-      fetchBinFiles();
+      await Promise.all([fetchFiles(), fetchBinFiles()]);
     } catch (error: any) {
       onMessage(`Move failed: ${error.message}`);
     }
@@ -222,8 +239,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
     try {
       await apiCall('restore_from_bin', `bin/${fileKey}`, 'POST');
       onMessage(`Restored "${fileKey}" from bin`);
-      fetchFiles();
-      fetchBinFiles();
+      await Promise.all([fetchFiles(), fetchBinFiles()]);
     } catch (error: any) {
       onMessage(`Restore failed: ${error.message}`);
     }
@@ -263,6 +279,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
         await getCurrentUser();
         await Promise.all([fetchFiles(), fetchBinFiles()]);
       } catch (error) {
+        console.error('Initialization error:', error);
         onMessage('Please sign in to access files');
         onAuthChange();
       }
@@ -272,7 +289,6 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
 
   return (
     <div className="min-h-screen p-6 bg-gray-50">
-      {/* Header */}
       <div className="flex justify-between items-center mb-8">
         <h1 className="text-3xl font-bold">CloudVault</h1>
         <button
@@ -286,7 +302,6 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
         </button>
       </div>
 
-      {/* Navigation */}
       <div className="mb-4">
         <h2 className="font-semibold">Current Path: {currentPath || '/'}</h2>
         {currentPath && (
@@ -299,7 +314,6 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
         )}
       </div>
 
-      {/* Create Folder */}
       <div className="flex gap-2 mb-6">
         <input
           type="text"
@@ -318,7 +332,6 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
         </button>
       </div>
 
-      {/* File Upload */}
       <div
         {...getRootProps()}
         className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer ${
@@ -330,7 +343,6 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
         <p>Drag & drop files here or click to browse</p>
       </div>
 
-      {/* Multiple Download Button */}
       <div className="mt-4">
         <button
           onClick={handleMultipleDownload}
@@ -341,7 +353,6 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
         </button>
       </div>
 
-      {/* Folders List */}
       <div className="mt-6">
         <h2 className="font-semibold mb-2">My Folders</h2>
         {loading ? (
@@ -364,7 +375,6 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
         )}
       </div>
 
-      {/* Files List */}
       <div className="mt-6">
         <h2 className="font-semibold mb-2">My Files</h2>
         {loading ? (
@@ -385,6 +395,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
                   checked={selectedFiles.includes(file)}
                   onChange={() => toggleFileSelection(file)}
                   className="mr-2"
+                  disabled={loading}
                 />
                 <span>{file}</span>
               </div>
@@ -409,7 +420,6 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
         )}
       </div>
 
-      {/* Bin */}
       <div className="mt-8">
         <h2 className="font-semibold mb-2">Recycle Bin</h2>
         {loading ? (
