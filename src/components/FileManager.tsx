@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getCurrentUser, signOut } from 'aws-amplify/auth';
+import { getCurrentUser, signOut, fetchAuthSession } from 'aws-amplify/auth';
 import { uploadData, getUrl } from 'aws-amplify/storage';
 import { get } from 'aws-amplify/api';
 import { useDropzone } from 'react-dropzone';
@@ -18,11 +18,9 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // ======================
-  // CURRENTLY USING PUBLIC BUCKET
-  // FOR TESTING - CHANGE TO PROTECTED IN PRODUCTION
-  // ======================
-  const accessLevel = 'guest'; // Change to 'protected' for production
+  // For testing: public; for production: protected
+  const accessLevel = 'guest';
+
   const getFileUrl = async (key: string) => {
     if (accessLevel === 'guest') {
       return `https://adler-personal-storage.s3.ap-south-1.amazonaws.com/${key}`;
@@ -38,18 +36,23 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
 
   const apiCall = async (path: string, method = 'GET', options = {}) => {
     try {
-      const user = await getCurrentUser();
+      const session = await fetchAuthSession();
+      const token = session.tokens?.idToken?.toString();
+
+      if (!token) throw new Error('No ID token found — user may not be signed in.');
+
       const response = await get({
         apiName: 'CV_v1',
-        path: path,
+        path,
         options: {
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${(await Auth.currentSession()).getIdToken().getJwtToken()}`
+            Authorization: `Bearer ${token}`,
           },
           ...options
         }
       }).response;
+
       return await response.body.json();
     } catch (error: any) {
       onMessage(`API call failed: ${error.message}`);
@@ -82,7 +85,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
       onMessage('Folder name cannot be empty');
       return;
     }
-    
+
     setLoading(true);
     try {
       await apiCall(`/file?action=create_folder&file=${encodeURIComponent(folderName)}`, 'POST');
@@ -100,9 +103,9 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
     setLoading(true);
     try {
       const user = await getCurrentUser();
-      
+
       await Promise.all(acceptedFiles.map(async (file) => {
-        const fileKey = accessLevel === 'protected' 
+        const fileKey = accessLevel === 'protected'
           ? `${user.username}/${file.name}`
           : file.name;
 
@@ -119,7 +122,6 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
       onMessage(`Uploaded ${acceptedFiles.length} file(s)`);
       fetchFiles();
     } catch (error) {
-      console.error('Upload error:', error);
       onMessage(`Upload failed: ${(error as Error).message}`);
     } finally {
       setLoading(false);
@@ -129,11 +131,11 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
   const handleDownload = async (fileKey: string) => {
     try {
       const url = await getFileUrl(
-        accessLevel === 'protected' 
+        accessLevel === 'protected'
           ? `${(await getCurrentUser()).username}/${fileKey}`
           : fileKey
       );
-      
+
       const link = document.createElement('a');
       link.href = url;
       link.download = fileKey;
@@ -147,7 +149,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
 
   const handleMultipleDownload = async () => {
     if (selectedFiles.length === 0) return;
-    
+
     setLoading(true);
     try {
       const zip = new JSZip();
@@ -209,8 +211,8 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
           <div>
             <h1 className="text-4xl font-bold text-gray-900 mb-2">CloudVault</h1>
             <p className="text-gray-600">
-              {accessLevel === 'guest' 
-                ? "PUBLIC MODE - For testing only" 
+              {accessLevel === 'guest'
+                ? "PUBLIC MODE - For testing only"
                 : "Secure cloud storage"}
             </p>
           </div>
@@ -235,13 +237,13 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Files Section */}
+          {/* My Files */}
           <div className="bg-white rounded-xl p-6 shadow border border-gray-200">
             <h2 className="text-2xl font-semibold text-gray-900 mb-6 flex items-center gap-2">
               <Upload className="w-6 h-6" />
               My Files
             </h2>
-            
+
             <div className="flex gap-2 mb-6">
               <input
                 type="text"
@@ -272,9 +274,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
               <p className="text-gray-900 font-medium mb-2">
                 {isDragActive ? 'Drop files here' : 'Drag & drop files here'}
               </p>
-              <p className="text-gray-500 text-sm">
-                or click to browse files
-              </p>
+              <p className="text-gray-500 text-sm">or click to browse files</p>
             </div>
 
             <div className="mt-6 space-y-2 max-h-96 overflow-y-auto">
@@ -325,7 +325,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
             </button>
           </div>
 
-          {/* Bin Section */}
+          {/* Recycle Bin */}
           <div className="bg-white rounded-xl p-6 shadow border border-gray-200">
             <h2 className="text-2xl font-semibold text-gray-900 mb-6 flex items-center gap-2">
               <Trash2 className="w-6 h-6" />
@@ -334,7 +334,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
             <p className="text-gray-500 text-sm mb-4">
               Files will be automatically deleted after 30 days
             </p>
-            
+
             <div className="space-y-2 max-h-96 overflow-y-auto">
               {binFiles.map((file, index) => (
                 <div key={index} className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-lg p-3">
