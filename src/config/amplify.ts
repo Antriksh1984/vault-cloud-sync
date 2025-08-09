@@ -18,7 +18,7 @@ const amplifyConfig = {
   API: {
     REST: {
       CV_v1: {
-        endpoint: 'https://necll2p9x2.execute-api.ap-south-1.amazonaws.com/Production',
+        endpoint: 'https://necll2p9x2.execute-api.ap-south-1.amazonaws.com/Production/file',
         region: 'ap-south-1'
       }
     }
