@@ -121,7 +121,7 @@ const apiCall = async (
       await Promise.all(
         acceptedFiles.map(async (file) => {
           const fileKey =
-            accessLevel === 'protected' ? `${user.username}/${file.name}` : file.name;
+            accessLevel === 'guest' ? `${user.username}/${file.name}` : file.name;
 
           await uploadData({
             key: fileKey,
@@ -147,7 +147,7 @@ const apiCall = async (
   const handleDownload = async (fileKey: string) => {
     try {
       const url = await getFileUrl(
-        accessLevel === 'protected'
+        accessLevel === 'guest'
           ? `${(await getCurrentUser()).username}/${fileKey}`
           : fileKey
       );
@@ -171,7 +171,7 @@ const apiCall = async (
       await Promise.all(
         selectedFiles.map(async (fileKey) => {
           const url = await getFileUrl(
-            accessLevel === 'protected'
+            accessLevel === 'guest'
               ? `${user.username}/${fileKey}`
               : fileKey
           );
