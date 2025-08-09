@@ -5,6 +5,7 @@ const amplifyConfig = {
     Cognito: {
       userPoolId: 'ap-south-1_y4GGRCtdR',
       userPoolClientId: '3thf1uf9n8bc7u0sogqv0bjrts',
+      identityPoolId: 'ap-south-1:ce4fa149-520e-44b6-a006-128b8ef30c1b', // required for S3 uploads
       region: 'ap-south-1'
     }
   },
