@@ -30,31 +30,49 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
     return url;
   };
 
-  // ===== Helper: API call with auth token =====
-  const apiCall = async (path: string, method: 'GET' | 'POST' = 'GET', body?: any) => {
-    try {
-      const session = await fetchAuthSession();
-      const token = session.tokens?.idToken?.toString();
+// ===== Helper: API call with auth token =====
+const apiCall = async (
+  path: string,
+  method: 'GET' | 'POST' = 'GET',
+  body?: any,
+  retries = 2
+) => {
+  try {
+    const session = await fetchAuthSession();
+    const token = session.tokens?.idToken?.toString();
 
-      const apiFn = method === 'GET' ? get : post;
-      const response = await apiFn({
-        apiName: 'CV_v1',
-        path,
-        options: {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          ...(body ? { body } : {})
-        }
-      }).response;
-
-      return await response.body.json();
-    } catch (error: any) {
-      console.error(`API ${method} ${path} failed:`, error);
-      throw error;
+    if (!token) {
+      if (retries > 0) {
+        console.warn(`No auth token yet. Retrying API call: ${path}`);
+        await new Promise((res) => setTimeout(res, 1000));
+        return apiCall(path, method, body, retries - 1);
+      }
+      throw new Error('Auth token missing after retries — likely Cognito session not ready.');
     }
-  };
+
+    const apiFn = method === 'GET' ? get : post;
+    const response = await apiFn({
+      apiName: 'CV_v1',
+      path,
+      options: {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        ...(body ? { body } : {})
+      }
+    }).response;
+
+    return await response.body.json();
+  } catch (error: any) {
+    if (error.message?.includes('Failed to fetch')) {
+      throw new Error(
+        'Network/CORS error — API Gateway might be missing CORS headers or OPTIONS method.'
+      );
+    }
+    throw error;
+  }
+};
 
   // ===== Fetch My Files =====
   const fetchFiles = async () => {
