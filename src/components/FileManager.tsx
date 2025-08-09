@@ -35,7 +35,6 @@ const FileManager: React.FC<FileManagerProps> = ({ onAuthChange }) => {
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
-  const accessLevel = 'private';
 
   // Helper: API call with auth token
   const apiCall = async (path: string, body: any = {}) => {
@@ -117,8 +116,9 @@ const FileManager: React.FC<FileManagerProps> = ({ onAuthChange }) => {
             key: fileKey,
             data: file,
             options: {
-              accessLevel,
+              accessLevel: 'private',
               contentType: file.type || 'application/octet-stream',
+              customPrefix: { private: '' }, // Bypass Amplify's private/<identityId>/ prefix
             },
           }).result;
         })
