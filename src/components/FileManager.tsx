@@ -47,10 +47,13 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
   const fetchFiles = async () => {
     try {
       const user = await getCurrentUser();
+      console.log('Current user:', user);
       const response = await apiCall(`/file?action=list&user=${user.username}`);
+      console.log('Files response:', response);
       setFiles(response?.files || []);
     } catch (error) {
       console.error('Error fetching files:', error);
+      onMessage(`Failed to fetch files: ${(error as Error).message}`);
     }
   };
 
