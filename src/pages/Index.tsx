@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { getCurrentUser } from 'aws-amplify/auth';
 import LoginForm from '@/components/LoginForm';
 import SignupForm from '@/components/SignupForm';
+import VerificationForm from '@/components/VerificationForm';
+import NewPasswordForm from '@/components/NewPasswordForm';
 import FileManager from '@/components/FileManager';
 import MessageBox from '@/components/MessageBox';
 import '@/config/amplify';
@@ -10,6 +12,8 @@ const Index = () => {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState({ show: false, text: '' });
+  const [authFlow, setAuthFlow] = useState<'login' | 'signup' | 'verify-signup' | 'verify-reset' | 'new-password'>('login');
+  const [pendingEmail, setPendingEmail] = useState('');
 
   useEffect(() => {
     checkAuthState();
@@ -36,6 +40,35 @@ const Index = () => {
 
   const handleAuthChange = () => {
     checkAuthState();
+  };
+
+  const handleSignupSuccess = (email: string) => {
+    setPendingEmail(email);
+    setAuthFlow('verify-signup');
+  };
+
+  const handleForgotPassword = (email: string) => {
+    setPendingEmail(email);
+    setAuthFlow('verify-reset');
+  };
+
+  const handleVerificationComplete = () => {
+    if (authFlow === 'verify-signup') {
+      setAuthFlow('login');
+      setPendingEmail('');
+    } else if (authFlow === 'verify-reset') {
+      setAuthFlow('new-password');
+    }
+  };
+
+  const handlePasswordReset = () => {
+    setAuthFlow('login');
+    setPendingEmail('');
+  };
+
+  const handleBack = () => {
+    setAuthFlow('login');
+    setPendingEmail('');
   };
 
   if (loading) {
@@ -67,10 +100,47 @@ const Index = () => {
               </p>
             </div>
             
-            <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
-              <LoginForm onMessage={handleMessage} onAuthChange={handleAuthChange} />
-              <SignupForm onMessage={handleMessage} />
-            </div>
+            {authFlow === 'verify-signup' ? (
+              <div className="max-w-md mx-auto">
+                <VerificationForm 
+                  email={pendingEmail}
+                  type="signup"
+                  onMessage={handleMessage}
+                  onVerificationComplete={handleVerificationComplete}
+                  onBack={handleBack}
+                />
+              </div>
+            ) : authFlow === 'verify-reset' ? (
+              <div className="max-w-md mx-auto">
+                <VerificationForm 
+                  email={pendingEmail}
+                  type="resetPassword"
+                  onMessage={handleMessage}
+                  onVerificationComplete={handleVerificationComplete}
+                  onBack={handleBack}
+                />
+              </div>
+            ) : authFlow === 'new-password' ? (
+              <div className="max-w-md mx-auto">
+                <NewPasswordForm 
+                  onMessage={handleMessage}
+                  onPasswordReset={handlePasswordReset}
+                  onBack={handleBack}
+                />
+              </div>
+            ) : (
+              <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+                <LoginForm 
+                  onMessage={handleMessage} 
+                  onAuthChange={handleAuthChange}
+                  onForgotPassword={handleForgotPassword}
+                />
+                <SignupForm 
+                  onMessage={handleMessage}
+                  onSignupSuccess={handleSignupSuccess}
+                />
+              </div>
+            )}
           </div>
         </div>
       )}

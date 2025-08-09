@@ -1,12 +1,16 @@
 import React, { useState } from 'react';
 import { signIn, resetPassword } from 'aws-amplify/auth';
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 interface LoginFormProps {
   onMessage: (text: string) => void;
   onAuthChange: () => void;
+  onForgotPassword: (email: string) => void;
 }
 
-const LoginForm = ({ onMessage, onAuthChange }: LoginFormProps) => {
+const LoginForm = ({ onMessage, onAuthChange, onForgotPassword }: LoginFormProps) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -35,6 +39,7 @@ const LoginForm = ({ onMessage, onAuthChange }: LoginFormProps) => {
     try {
       await resetPassword({ username: email });
       onMessage('Reset code sent to your email.');
+      onForgotPassword(email);
     } catch (error: any) {
       onMessage('Error: ' + error.message);
     }
@@ -49,50 +54,45 @@ const LoginForm = ({ onMessage, onAuthChange }: LoginFormProps) => {
       
       <form onSubmit={handleLogin} className="space-y-6">
         <div>
-          <label htmlFor="email" className="block text-sm font-medium text-foreground mb-2">
-            Email Address
-          </label>
-          <input
+          <Label htmlFor="email">Email Address</Label>
+          <Input
             id="email"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full px-4 py-3 border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-ring bg-background text-foreground"
             placeholder="Enter your email"
             required
           />
         </div>
         
         <div>
-          <label htmlFor="password" className="block text-sm font-medium text-foreground mb-2">
-            Password
-          </label>
-          <input
+          <Label htmlFor="password">Password</Label>
+          <Input
             id="password"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full px-4 py-3 border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-ring bg-background text-foreground"
             placeholder="Enter your password"
             required
           />
         </div>
         
-        <button
+        <Button
           type="submit"
           disabled={loading}
-          className="w-full bg-primary text-primary-foreground py-3 rounded-lg hover:bg-primary/90 transition-colors font-medium disabled:opacity-50"
+          className="w-full"
         >
           {loading ? 'Signing in...' : 'Sign In'}
-        </button>
+        </Button>
         
-        <button
+        <Button
           type="button"
+          variant="link"
           onClick={handleForgotPassword}
-          className="w-full text-primary hover:text-primary/80 transition-colors text-sm font-medium"
+          className="w-full"
         >
           Forgot Password?
-        </button>
+        </Button>
       </form>
     </div>
   );

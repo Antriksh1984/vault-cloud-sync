@@ -1,11 +1,15 @@
 import React, { useState } from 'react';
 import { signUp } from 'aws-amplify/auth';
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 interface SignupFormProps {
   onMessage: (text: string) => void;
+  onSignupSuccess: (email: string) => void;
 }
 
-const SignupForm = ({ onMessage }: SignupFormProps) => {
+const SignupForm = ({ onMessage, onSignupSuccess }: SignupFormProps) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -25,6 +29,7 @@ const SignupForm = ({ onMessage }: SignupFormProps) => {
         }
       });
       onMessage('Verification code sent to your email. Please verify to log in.');
+      onSignupSuccess(email);
       setEmail('');
       setPassword('');
     } catch (error: any) {
@@ -43,30 +48,24 @@ const SignupForm = ({ onMessage }: SignupFormProps) => {
       
       <form onSubmit={handleSignup} className="space-y-6">
         <div>
-          <label htmlFor="signup-email" className="block text-sm font-medium text-foreground mb-2">
-            Email Address
-          </label>
-          <input
+          <Label htmlFor="signup-email">Email Address</Label>
+          <Input
             id="signup-email"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full px-4 py-3 border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-ring bg-background text-foreground"
             placeholder="Enter your email"
             required
           />
         </div>
         
         <div>
-          <label htmlFor="signup-password" className="block text-sm font-medium text-foreground mb-2">
-            Password
-          </label>
-          <input
+          <Label htmlFor="signup-password">Password</Label>
+          <Input
             id="signup-password"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full px-4 py-3 border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-ring bg-background text-foreground"
             placeholder="Create a password"
             required
             minLength={8}
@@ -76,13 +75,14 @@ const SignupForm = ({ onMessage }: SignupFormProps) => {
           </p>
         </div>
         
-        <button
+        <Button
           type="submit"
           disabled={loading}
-          className="w-full bg-success text-success-foreground py-3 rounded-lg hover:bg-success/90 transition-colors font-medium disabled:opacity-50"
+          variant="default"
+          className="w-full bg-success text-success-foreground hover:bg-success/90"
         >
           {loading ? 'Creating account...' : 'Create Account'}
-        </button>
+        </Button>
       </form>
     </div>
   );
