@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getCurrentUser, signOut, fetchAuthSession } from 'aws-amplify/auth';
-import { uploadData, getUrl } from 'aws-amplify/storage';
-import { get, post } from 'aws-amplify/api';
+import { get } from 'aws-amplify/api';
 import { useDropzone } from 'react-dropzone';
 import JSZip from 'jszip';
 import { Upload, Download, Trash2, FolderPlus, RotateCcw, LogOut } from 'lucide-react';
@@ -13,95 +12,102 @@ interface FileManagerProps {
 
 const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
   const [files, setFiles] = useState<string[]>([]);
+  const [folders, setFolders] = useState<string[]>([]);
   const [folderName, setFolderName] = useState('');
   const [binFiles, setBinFiles] = useState<string[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // For testing — set to "guest". For production, use "protected".
-  const accessLevel = 'guest';
-
-  // ===== Helper: Get file URL =====
-  const getFileUrl = async (key: string) => {
-    if (accessLevel === 'guest') {
-      return `https://adler-personal-storage.s3.ap-south-1.amazonaws.com/${key}`;
-    }
-    const { url } = await getUrl({ key, options: { accessLevel } });
-    return url;
+  // Helper: Clean file key for display (remove public/{user_id}/ prefix)
+  const cleanFileKey = (key: string, userId: string) => {
+    const prefix = `public/${userId}/`;
+    return key.startsWith(prefix) ? key.slice(prefix.length) : key;
   };
 
-// ===== Helper: API call with auth token =====
-const apiCall = async (
-  path: string,
-  method: 'GET' | 'POST' = 'GET',
-  body?: any,
-  retries = 2
-) => {
-  try {
-    const session = await fetchAuthSession();
-    const token = session.tokens?.idToken?.toString();
+  // Helper: Clean bin file key for display (remove public/{user_id}/bin/ prefix)
+  const cleanBinFileKey = (key: string, userId: string) => {
+    const prefix = `public/${userId}/bin/`;
+    return key.startsWith(prefix) ? key.slice(prefix.length) : key;
+  };
 
-    if (!token) {
-      if (retries > 0) {
-        console.warn(`No auth token yet. Retrying API call: ${path}`);
-        await new Promise((res) => setTimeout(res, 1000));
-        return apiCall(path, method, body, retries - 1);
+  // Helper: API call with auth token
+  const apiCall = async (
+    action: string,
+    fileKey?: string,
+    method: 'GET' | 'POST' = 'GET',
+    body?: any,
+    retries = 2
+  ) => {
+    try {
+      const session = await fetchAuthSession();
+      const token = session.tokens?.idToken?.toString();
+
+      if (!token) {
+        if (retries > 0) {
+          console.warn(`No auth token yet. Retrying API call: ${action}`);
+          await new Promise((res) => setTimeout(res, 1000));
+          return apiCall(action, fileKey, method, body, retries - 1);
+        }
+        throw new Error('Auth token missing after retries — likely Cognito session not ready.');
       }
-      throw new Error('Auth token missing after retries — likely Cognito session not ready.');
-    }
 
-    const apiFn = method === 'GET' ? get : post;
-    const response = await apiFn({
-      apiName: 'CV_v1',
-      path,
-      options: {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        ...(body ? { body } : {})
+      const queryParams = new URLSearchParams({ action });
+      if (fileKey) {
+        queryParams.append('file', encodeURIComponent(fileKey));
       }
-    }).response;
 
-    return await response.body.json();
-  } catch (error: any) {
-    if (error.message?.includes('Failed to fetch')) {
-      throw new Error(
-        'Network/CORS error — API Gateway might be missing CORS headers or OPTIONS method.'
-      );
+      const response = await get({
+        apiName: 'CV_v1',
+        path: `/file?${queryParams.toString()}`,
+        options: {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          ...(body ? { body } : {})
+        }
+      }).response;
+
+      return await response.body.json();
+    } catch (error: any) {
+      if (error.message?.includes('Failed to fetch')) {
+        throw new Error(
+          'Network/CORS error — API Gateway might be missing CORS headers or OPTIONS method.'
+        );
+      }
+      throw error;
     }
-    throw error;
-  }
-};
+  };
 
-  // ===== Fetch My Files =====
+  // Fetch My Files and Folders
   const fetchFiles = async () => {
     try {
       const user = await getCurrentUser();
-      const response = await apiCall(`/file?action=list&user=${user.username}`);
-      setFiles(response?.files || []);
+      const response = await apiCall('list');
+      setFiles((response?.files || []).map((key: string) => cleanFileKey(key, user.username)));
+      setFolders((response?.folders || []).map((key: string) => cleanFileKey(key, user.username)));
     } catch (error: any) {
       onMessage(`Failed to fetch files: ${error.message}`);
     }
   };
 
-  // ===== Fetch Bin =====
+  // Fetch Bin
   const fetchBinFiles = async () => {
     try {
       const user = await getCurrentUser();
-      const response = await apiCall(`/file?action=list&user=${user.username}&prefix=bin`);
-      setBinFiles(response?.files || []);
+      const response = await apiCall('list', 'bin/');
+      setBinFiles((response?.files || []).map((key: string) => cleanBinFileKey(key, user.username)));
     } catch (error: any) {
       onMessage(`Failed to fetch bin: ${error.message}`);
     }
   };
 
-  // ===== Create Folder =====
+  // Create Folder
   const createFolder = async () => {
     if (!folderName.trim()) return onMessage('Folder name cannot be empty');
     setLoading(true);
     try {
-      await apiCall(`/file?action=create_folder&file=${encodeURIComponent(folderName)}`, 'POST');
+      await apiCall('create_folder', folderName, 'POST');
       onMessage(`Folder "${folderName}" created`);
       setFolderName('');
       fetchFiles();
@@ -112,28 +118,24 @@ const apiCall = async (
     }
   };
 
-  // ===== Upload =====
+  // Upload
   const handleUpload = async (acceptedFiles: File[]) => {
     setLoading(true);
     try {
       const user = await getCurrentUser();
-
       await Promise.all(
         acceptedFiles.map(async (file) => {
-          const fileKey =
-            accessLevel === 'guest' ? `${user.username}/${file.name}` : file.name;
+          const fileKey = `${file.name}`;
+          const response = await apiCall('generate_upload_url', fileKey);
+          const { uploadURL } = response;
 
-          await uploadData({
-            key: fileKey,
-            data: file,
-            options: {
-              accessLevel,
-              contentType: file.type || 'application/octet-stream'
-            }
-          }).result;
+          await fetch(uploadURL, {
+            method: 'PUT',
+            headers: { 'Content-Type': file.type || 'application/octet-stream' },
+            body: file
+          });
         })
       );
-
       onMessage(`Uploaded ${acceptedFiles.length} file(s)`);
       fetchFiles();
     } catch (error: any) {
@@ -143,16 +145,12 @@ const apiCall = async (
     }
   };
 
-  // ===== Download Single =====
+  // Download Single
   const handleDownload = async (fileKey: string) => {
     try {
-      const url = await getFileUrl(
-        accessLevel === 'guest'
-          ? `${(await getCurrentUser()).username}/${fileKey}`
-          : fileKey
-      );
+      const response = await apiCall('get_file', fileKey);
       const link = document.createElement('a');
-      link.href = url;
+      link.href = response;
       link.download = fileKey;
       link.click();
     } catch (error: any) {
@@ -160,26 +158,19 @@ const apiCall = async (
     }
   };
 
-  // ===== Download Multiple =====
+  // Download Multiple
   const handleMultipleDownload = async () => {
     if (selectedFiles.length === 0) return;
     setLoading(true);
     try {
       const zip = new JSZip();
-      const user = await getCurrentUser();
-
       await Promise.all(
         selectedFiles.map(async (fileKey) => {
-          const url = await getFileUrl(
-            accessLevel === 'guest'
-              ? `${user.username}/${fileKey}`
-              : fileKey
-          );
+          const url = await apiCall('get_file', fileKey);
           const response = await fetch(url);
           zip.file(fileKey, await response.blob());
         })
       );
-
       const content = await zip.generateAsync({ type: 'blob' });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(content);
@@ -192,10 +183,11 @@ const apiCall = async (
     }
   };
 
-  // ===== Move to Bin =====
+  // Move to Bin
   const moveToBin = async (fileKey: string) => {
     try {
-      await apiCall(`/bin?action=move_to_bin&file=${encodeURIComponent(fileKey)}`, 'POST');
+      await apiCall('move_to_bin', fileKey, 'POST');
+      onMessage(`Moved "${fileKey}" to bin`);
       fetchFiles();
       fetchBinFiles();
     } catch (error: any) {
@@ -203,10 +195,11 @@ const apiCall = async (
     }
   };
 
-  // ===== Restore from Bin =====
+  // Restore from Bin
   const restoreFromBin = async (fileKey: string) => {
     try {
-      await apiCall(`/bin?action=restore_from_bin&file=${encodeURIComponent(fileKey)}`, 'POST');
+      await apiCall('restore_from_bin', `bin/${fileKey}`, 'POST');
+      onMessage(`Restored "${fileKey}" from bin`);
       fetchFiles();
       fetchBinFiles();
     } catch (error: any) {
@@ -269,6 +262,20 @@ const apiCall = async (
         <Upload className="mx-auto w-12 h-12 text-gray-400 mb-2" />
         <p>Drag & drop files here or click to browse</p>
       </div>
+
+      {/* Folders List */}
+      <div className="mt-6">
+        <h2 className="font-semibold mb-2">My Folders</h2>
+        {folders.length === 0 ? (
+          <p className="text-gray-500">No folders found</p>
+        ) : (
+          folders.map((folder) => (
+            <div key={folder} className="flex justify-between items-center bg-white p-2 border rounded mb-1">
+              <span>{folder}</span>
+            </div>
+          ))
+        )
+      }
 
       {/* Files List */}
       <div className="mt-6">
