@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { getCurrentUser, signOut, fetchAuthSession } from 'aws-amplify/auth';
-import { get } from 'aws-amplify/api';
+import { get, post } from 'aws-amplify/api';
 import { useDropzone } from 'react-dropzone';
 import JSZip from 'jszip';
-import { Upload, Download, Trash2, FolderPlus, RotateCcw, LogOut } from 'lucide-react';
+import { Upload, Download, Trash2, FolderPlus, RotateCcw, LogOut, Folder } from 'lucide-react';
 
 interface FileManagerProps {
   onMessage: (text: string) => void;
@@ -17,6 +17,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
   const [binFiles, setBinFiles] = useState<string[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [currentPath, setCurrentPath] = useState(''); // For folder navigation
 
   // Helper: Clean file key for display (remove public/{user_id}/ prefix)
   const cleanFileKey = (key: string, userId: string) => {
@@ -48,7 +49,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
           await new Promise((res) => setTimeout(res, 1000));
           return apiCall(action, fileKey, method, body, retries - 1);
         }
-        throw new Error('Auth token missing after retries — likely Cognito session not ready.');
+        throw new Error('Authentication token missing after retries.');
       }
 
       const queryParams = new URLSearchParams({ action });
@@ -56,7 +57,8 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
         queryParams.append('file', encodeURIComponent(fileKey));
       }
 
-      const response = await get({
+      const apiFn = method === 'GET' ? get : post;
+      const response = await apiFn({
         apiName: 'CV_v1',
         path: `/file?${queryParams.toString()}`,
         options: {
@@ -70,20 +72,15 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
 
       return await response.body.json();
     } catch (error: any) {
-      if (error.message?.includes('Failed to fetch')) {
-        throw new Error(
-          'Network/CORS error — API Gateway might be missing CORS headers or OPTIONS method.'
-        );
-      }
-      throw error;
+      throw new Error(error.message || 'Failed to communicate with the server.');
     }
   };
 
-  // Fetch My Files and Folders
+  // Fetch Files and Folders
   const fetchFiles = async () => {
     try {
       const user = await getCurrentUser();
-      const response = await apiCall('list');
+      const response = await apiCall('list', currentPath);
       setFiles((response?.files || []).map((key: string) => cleanFileKey(key, user.username)));
       setFolders((response?.folders || []).map((key: string) => cleanFileKey(key, user.username)));
     } catch (error: any) {
@@ -107,7 +104,8 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
     if (!folderName.trim()) return onMessage('Folder name cannot be empty');
     setLoading(true);
     try {
-      await apiCall('create_folder', folderName, 'POST');
+      const folderPath = currentPath ? `${currentPath}${folderName}` : folderName;
+      await apiCall('create_folder', folderPath, 'POST');
       onMessage(`Folder "${folderName}" created`);
       setFolderName('');
       fetchFiles();
@@ -125,8 +123,10 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
       const user = await getCurrentUser();
       await Promise.all(
         acceptedFiles.map(async (file) => {
-          const fileKey = `${file.name}`;
-          const response = await apiCall('generate_upload_url', fileKey);
+          const fileKey = currentPath ? `${currentPath}${file.name}` : file.name;
+          const response = await apiCall('generate_upload_url', fileKey, 'GET', null, {
+            contentType: file.type || 'application/octet-stream'
+          });
           const { uploadURL } = response;
 
           await fetch(uploadURL, {
@@ -148,7 +148,8 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
   // Download Single
   const handleDownload = async (fileKey: string) => {
     try {
-      const response = await apiCall('get_file', fileKey);
+      const downloadKey = currentPath ? `${currentPath}${fileKey}` : fileKey;
+      const response = await apiCall('get_file', downloadKey);
       const link = document.createElement('a');
       link.href = response;
       link.download = fileKey;
@@ -160,13 +161,17 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
 
   // Download Multiple
   const handleMultipleDownload = async () => {
-    if (selectedFiles.length === 0) return;
+    if (selectedFiles.length === 0) {
+      onMessage('No files selected for download');
+      return;
+    }
     setLoading(true);
     try {
       const zip = new JSZip();
       await Promise.all(
         selectedFiles.map(async (fileKey) => {
-          const url = await apiCall('get_file', fileKey);
+          const downloadKey = currentPath ? `${currentPath}${fileKey}` : fileKey;
+          const url = await apiCall('get_file', downloadKey);
           const response = await fetch(url);
           zip.file(fileKey, await response.blob());
         })
@@ -176,6 +181,8 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
       link.href = URL.createObjectURL(content);
       link.download = 'download.zip';
       link.click();
+      onMessage(`Downloaded ${selectedFiles.length} file(s)`);
+      setSelectedFiles([]);
     } catch (error: any) {
       onMessage(`Download failed: ${error.message}`);
     } finally {
@@ -186,7 +193,8 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
   // Move to Bin
   const moveToBin = async (fileKey: string) => {
     try {
-      await apiCall('move_to_bin', fileKey, 'POST');
+      const moveKey = currentPath ? `${currentPath}${fileKey}` : fileKey;
+      await apiCall('move_to_bin', moveKey, 'POST');
       onMessage(`Moved "${fileKey}" to bin`);
       fetchFiles();
       fetchBinFiles();
@@ -207,6 +215,29 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
     }
   };
 
+  // Navigate into Folder
+  const navigateToFolder = (folder: string) => {
+    setCurrentPath((prev) => (prev ? `${prev}${folder}` : folder));
+  };
+
+  // Navigate Up
+  const navigateUp = () => {
+    setCurrentPath((prev) => {
+      const parts = prev.split('/').filter(Boolean);
+      parts.pop();
+      return parts.length > 0 ? `${parts.join('/')}/` : '';
+    });
+  };
+
+  // Handle File Selection
+  const toggleFileSelection = (fileKey: string) => {
+    setSelectedFiles((prev) =>
+      prev.includes(fileKey)
+        ? prev.filter((key) => key !== fileKey)
+        : [...prev, fileKey]
+    );
+  };
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop: handleUpload,
     disabled: loading
@@ -215,7 +246,7 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
   useEffect(() => {
     fetchFiles();
     fetchBinFiles();
-  }, []);
+  }, [currentPath]);
 
   return (
     <div className="min-h-screen p-6 bg-gray-50">
@@ -231,6 +262,19 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
         >
           <LogOut className="inline w-4 h-4 mr-1" /> Sign Out
         </button>
+      </div>
+
+      {/* Navigation */}
+      <div className="mb-4">
+        <h2 className="font-semibold">Current Path: {currentPath || '/'}</h2>
+        {currentPath && (
+          <button
+            onClick={navigateUp}
+            className="text-blue-500 hover:underline"
+          >
+            Go Up
+          </button>
+        )}
       </div>
 
       {/* Create Folder */}
@@ -263,6 +307,17 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
         <p>Drag & drop files here or click to browse</p>
       </div>
 
+      {/* Multiple Download Button */}
+      <div className="mt-4">
+        <button
+          onClick={handleMultipleDownload}
+          disabled={loading || selectedFiles.length === 0}
+          className="bg-purple-500 text-white px-4 py-2 rounded-lg disabled:opacity-50"
+        >
+          <Download className="inline w-4 h-4 mr-1" /> Download Selected ({selectedFiles.length})
+        </button>
+      </div>
+
       {/* Folders List */}
       <div className="mt-6">
         <h2 className="font-semibold mb-2">My Folders</h2>
@@ -270,12 +325,19 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
           <p className="text-gray-500">No folders found</p>
         ) : (
           folders.map((folder) => (
-            <div key={folder} className="flex justify-between items-center bg-white p-2 border rounded mb-1">
-              <span>{folder}</span>
+            <div
+              key={folder}
+              className="flex justify-between items-center bg-white p-2 border rounded mb-1 cursor-pointer hover:bg-gray-100"
+              onClick={() => navigateToFolder(folder)}
+            >
+              <span>
+                <Folder className="inline w-4 h-4 mr-2" />
+                {folder}
+              </span>
             </div>
           ))
-        )
-      }
+        )}
+      </div>
 
       {/* Files List */}
       <div className="mt-6">
@@ -284,13 +346,32 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
           <p className="text-gray-500">No files found</p>
         ) : (
           files.map((file) => (
-            <div key={file} className="flex justify-between items-center bg-white p-2 border rounded mb-1">
-              <span>{file}</span>
+            <div
+              key={file}
+              className={`flex justify-between items-center bg-white p-2 border rounded mb-1 ${
+                selectedFiles.includes(file) ? 'bg-blue-100' : ''
+              }`}
+            >
+              <div>
+                <input
+                  type="checkbox"
+                  checked={selectedFiles.includes(file)}
+                  onChange={() => toggleFileSelection(file)}
+                  className="mr-2"
+                />
+                <span>{file}</span>
+              </div>
               <div className="flex gap-2">
-                <button onClick={() => handleDownload(file)} className="bg-green-500 p-2 rounded text-white">
+                <button
+                  onClick={() => handleDownload(file)}
+                  className="bg-green-500 p-2 rounded text-white"
+                >
                   <Download className="w-4 h-4" />
                 </button>
-                <button onClick={() => moveToBin(file)} className="bg-red-500 p-2 rounded text-white">
+                <button
+                  onClick={() => moveToBin(file)}
+                  className="bg-red-500 p-2 rounded text-white"
+                >
                   <Trash2 className="w-4 h-4" />
                 </button>
               </div>
@@ -306,9 +387,15 @@ const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
           <p className="text-gray-500">Bin is empty</p>
         ) : (
           binFiles.map((file) => (
-            <div key={file} className="flex justify-between items-center bg-white p-2 border rounded mb-1">
+            <div
+              key={file}
+              className="flex justify-between items-center bg-white p-2 border rounded mb-1"
+            >
               <span>{file}</span>
-              <button onClick={() => restoreFromBin(file)} className="bg-yellow-500 p-2 rounded text-white">
+              <button
+                onClick={() => restoreFromBin(file)}
+                className="bg-yellow-500 p-2 rounded text-white"
+              >
                 <RotateCcw className="w-4 h-4" />
               </button>
             </div>
