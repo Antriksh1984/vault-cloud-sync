@@ -1,3 +1,4 @@
+import './config/amplify';
 import React, { useState, useEffect } from 'react';
 import { getCurrentUser } from 'aws-amplify/auth';
 import LoginForm from '@/components/LoginForm';
