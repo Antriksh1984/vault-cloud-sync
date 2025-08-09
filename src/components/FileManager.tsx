@@ -1,215 +1,222 @@
 import React, { useState, useEffect } from 'react';
 import { getCurrentUser, signOut, fetchAuthSession } from 'aws-amplify/auth';
-import { uploadData } from 'aws-amplify/storage';
-import { post } from 'aws-amplify/api';
+import { uploadData, getUrl } from 'aws-amplify/storage';
+import { get, post } from 'aws-amplify/api';
 import { useDropzone } from 'react-dropzone';
 import JSZip from 'jszip';
-import { Upload, Download, Trash2, FolderPlus, RotateCcw, LogOut, DownloadCloud } from 'lucide-react';
+import { Upload, Download, Trash2, FolderPlus, RotateCcw, LogOut } from 'lucide-react';
 
 interface FileManagerProps {
+  onMessage: (text: string) => void;
   onAuthChange: () => void;
 }
 
-interface FileItem {
-  key: string;
-}
-
-const MessageBox: React.FC<{ message: string; onClose: () => void }> = ({ message, onClose }) => (
-  <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50">
-    <div className="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
-      <p className="text-gray-800 mb-4">{message}</p>
-      <button
-        onClick={onClose}
-        className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 transition-colors focus:ring-2 focus:ring-blue-600"
-      >
-        OK
-      </button>
-    </div>
-  </div>
-);
-
-const FileManager: React.FC<FileManagerProps> = ({ onAuthChange }) => {
-  const [files, setFiles] = useState<FileItem[]>([]);
-  const [binFiles, setBinFiles] = useState<FileItem[]>([]);
+const FileManager = ({ onMessage, onAuthChange }: FileManagerProps) => {
+  const [files, setFiles] = useState<string[]>([]);
   const [folderName, setFolderName] = useState('');
+  const [binFiles, setBinFiles] = useState<string[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState('');
 
-  // Helper: API call with auth token
-  const apiCall = async (path: string, body: any = {}) => {
-    try {
-      const session = await fetchAuthSession();
-      const token = session.tokens?.idToken?.toString();
-      if (!token) throw new Error('Authentication token is missing.');
-      const response = await post({
-        apiName: 'CV_v1',
-        path,
-        options: {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body,
+  // For testing — set to "guest". For production, use "protected".
+  const accessLevel = 'guest';
+
+  // ===== Helper: Get file URL =====
+  const getFileUrl = async (key: string) => {
+    if (accessLevel === 'guest') {
+      return `https://adler-personal-storage.s3.ap-south-1.amazonaws.com/${key}`;
+    }
+    const { url } = await getUrl({ key, options: { accessLevel } });
+    return url;
+  };
+
+// ===== Helper: API call with auth token =====
+const apiCall = async (
+  path: string,
+  method: 'GET' | 'POST' = 'GET',
+  body?: any,
+  retries = 2
+) => {
+  try {
+    const session = await fetchAuthSession();
+    const token = session.tokens?.idToken?.toString();
+
+    if (!token) {
+      if (retries > 0) {
+        console.warn(`No auth token yet. Retrying API call: ${path}`);
+        await new Promise((res) => setTimeout(res, 1000));
+        return apiCall(path, method, body, retries - 1);
+      }
+      throw new Error('Auth token missing after retries — likely Cognito session not ready.');
+    }
+
+    const apiFn = method === 'GET' ? get : post;
+    const response = await apiFn({
+      apiName: 'CV_v1',
+      path,
+      options: {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
         },
-      }).response;
-      return await response.body.json();
-    } catch (error: any) {
-      throw new Error(error.message || 'API call failed.');
-    }
-  };
+        ...(body ? { body } : {})
+      }
+    }).response;
 
-  // Fetch My Files
+    return await response.body.json();
+  } catch (error: any) {
+    if (error.message?.includes('Failed to fetch')) {
+      throw new Error(
+        'Network/CORS error — API Gateway might be missing CORS headers or OPTIONS method.'
+      );
+    }
+    throw error;
+  }
+};
+
+  // ===== Fetch My Files =====
   const fetchFiles = async () => {
-    setLoading(true);
     try {
-      const response = await apiCall('/list');
-      setFiles(response.files || []);
+      const user = await getCurrentUser();
+      const response = await apiCall(`/file?action=list&user=${user.username}`);
+      setFiles(response?.files || []);
     } catch (error: any) {
-      setMessage(`Failed to fetch files: ${error.message}`);
-    } finally {
-      setLoading(false);
+      onMessage(`Failed to fetch files: ${error.message}`);
     }
   };
 
-  // Fetch Bin
+  // ===== Fetch Bin =====
   const fetchBinFiles = async () => {
-    setLoading(true);
     try {
-      const response = await apiCall('/list_bin');
-      setBinFiles(response.files || []);
+      const user = await getCurrentUser();
+      const response = await apiCall(`/file?action=list&user=${user.username}&prefix=bin`);
+      setBinFiles(response?.files || []);
     } catch (error: any) {
-      setMessage(`Failed to fetch bin: ${error.message}`);
-    } finally {
-      setLoading(false);
+      onMessage(`Failed to fetch bin: ${error.message}`);
     }
   };
 
-  // Create Folder
+  // ===== Create Folder =====
   const createFolder = async () => {
-    if (!folderName.trim()) {
-      setMessage('Folder name cannot be empty.');
-      return;
-    }
+    if (!folderName.trim()) return onMessage('Folder name cannot be empty');
     setLoading(true);
     try {
-      await apiCall('/create_folder', { folderName });
-      setMessage(`Folder "${folderName}" created.`);
+      await apiCall(`/file?action=create_folder&file=${encodeURIComponent(folderName)}`, 'POST');
+      onMessage(`Folder "${folderName}" created`);
       setFolderName('');
-      await fetchFiles();
+      fetchFiles();
     } catch (error: any) {
-      setMessage(`Folder creation failed: ${error.message}`);
+      onMessage(`Folder creation failed: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // Upload Files
+  // ===== Upload =====
   const handleUpload = async (acceptedFiles: File[]) => {
     setLoading(true);
     try {
       const user = await getCurrentUser();
+
       await Promise.all(
         acceptedFiles.map(async (file) => {
-          const fileKey = `public/${user.userId}/${file.webkitRelativePath || file.name}`;
+          const fileKey =
+            accessLevel === 'guest' ? `${user.username}/${file.name}` : file.name;
+
           await uploadData({
             key: fileKey,
             data: file,
             options: {
-              accessLevel: 'private',
-              contentType: file.type || 'application/octet-stream',
-              customPrefix: { private: '' }, // Bypass Amplify's private/<identityId>/ prefix
-            },
+              accessLevel,
+              contentType: file.type || 'application/octet-stream'
+            }
           }).result;
         })
       );
-      setMessage(`Uploaded ${acceptedFiles.length} file(s).`);
-      await fetchFiles();
+
+      onMessage(`Uploaded ${acceptedFiles.length} file(s)`);
+      fetchFiles();
     } catch (error: any) {
-      setMessage(`Upload failed: ${error.message}`);
+      onMessage(`Upload failed: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // Download Single File
+  // ===== Download Single =====
   const handleDownload = async (fileKey: string) => {
-    setLoading(true);
     try {
-      const response = await apiCall('/get_file', { fileKey });
+      const url = await getFileUrl(
+        accessLevel === 'guest'
+          ? `${(await getCurrentUser()).username}/${fileKey}`
+          : fileKey
+      );
       const link = document.createElement('a');
-      link.href = response.url;
-      link.download = fileKey.split('/').pop() || fileKey;
+      link.href = url;
+      link.download = fileKey;
       link.click();
-      setMessage('File downloaded successfully.');
     } catch (error: any) {
-      setMessage(`Download failed: ${error.message}`);
-    } finally {
-      setLoading(false);
+      onMessage(`Download failed: ${error.message}`);
     }
   };
 
-  // Download Multiple Files
+  // ===== Download Multiple =====
   const handleMultipleDownload = async () => {
-    if (selectedFiles.length === 0) {
-      setMessage('Please select at least one file.');
-      return;
-    }
+    if (selectedFiles.length === 0) return;
     setLoading(true);
     try {
       const zip = new JSZip();
+      const user = await getCurrentUser();
+
       await Promise.all(
         selectedFiles.map(async (fileKey) => {
-          const response = await apiCall('/get_file', { fileKey });
-          const res = await fetch(response.url);
-          zip.file(fileKey.split('/').pop() || fileKey, await res.blob());
+          const url = await getFileUrl(
+            accessLevel === 'guest'
+              ? `${user.username}/${fileKey}`
+              : fileKey
+          );
+          const response = await fetch(url);
+          zip.file(fileKey, await response.blob());
         })
       );
+
       const content = await zip.generateAsync({ type: 'blob' });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(content);
-      link.download = 'CloudVault_Download.zip';
+      link.download = 'download.zip';
       link.click();
-      setMessage('Files downloaded as ZIP.');
-      setSelectedFiles([]);
     } catch (error: any) {
-      setMessage(`Download failed: ${error.message}`);
+      onMessage(`Download failed: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // Move to Bin
+  // ===== Move to Bin =====
   const moveToBin = async (fileKey: string) => {
-    setLoading(true);
     try {
-      await apiCall('/move_to_bin', { fileKey });
-      setMessage('File moved to bin.');
-      await Promise.all([fetchFiles(), fetchBinFiles()]);
+      await apiCall(`/bin?action=move_to_bin&file=${encodeURIComponent(fileKey)}`, 'POST');
+      fetchFiles();
+      fetchBinFiles();
     } catch (error: any) {
-      setMessage(`Move failed: ${error.message}`);
-    } finally {
-      setLoading(false);
+      onMessage(`Move failed: ${error.message}`);
     }
   };
 
-  // Restore from Bin
+  // ===== Restore from Bin =====
   const restoreFromBin = async (fileKey: string) => {
-    setLoading(true);
     try {
-      await apiCall('/restore_from_bin', { fileKey });
-      setMessage('File restored successfully.');
-      await Promise.all([fetchFiles(), fetchBinFiles()]);
+      await apiCall(`/bin?action=restore_from_bin&file=${encodeURIComponent(fileKey)}`, 'POST');
+      fetchFiles();
+      fetchBinFiles();
     } catch (error: any) {
-      setMessage(`Restore failed: ${error.message}`);
-    } finally {
-      setLoading(false);
+      onMessage(`Restore failed: ${error.message}`);
     }
   };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop: handleUpload,
-    disabled: loading,
+    disabled: loading
   });
 
   useEffect(() => {
@@ -218,29 +225,16 @@ const FileManager: React.FC<FileManagerProps> = ({ onAuthChange }) => {
   }, []);
 
   return (
-    <div className="min-h-screen max-w-7xl mx-auto p-6 bg-gray-50 font-inter">
-      {message && <MessageBox message={message} onClose={() => setMessage('')} />}
-      {loading && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-25">
-          <div className="bg-white p-4 rounded-lg shadow-xl">Loading...</div>
-        </div>
-      )}
+    <div className="min-h-screen p-6 bg-gray-50">
       {/* Header */}
       <div className="flex justify-between items-center mb-8">
-        <h1 className="text-3xl font-bold text-gray-800">CloudVault</h1>
+        <h1 className="text-3xl font-bold">CloudVault</h1>
         <button
           onClick={async () => {
-            setLoading(true);
-            try {
-              await signOut();
-              onAuthChange();
-            } catch (error: any) {
-              setMessage(`Sign out failed: ${error.message}`);
-            } finally {
-              setLoading(false);
-            }
+            await signOut();
+            onAuthChange();
           }}
-          className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 transition-colors focus:ring-2 focus:ring-red-600"
+          className="bg-red-500 text-white px-4 py-2 rounded-lg"
         >
           <LogOut className="inline w-4 h-4 mr-1" /> Sign Out
         </button>
@@ -253,13 +247,12 @@ const FileManager: React.FC<FileManagerProps> = ({ onAuthChange }) => {
           value={folderName}
           onChange={(e) => setFolderName(e.target.value)}
           placeholder="New folder name"
-          className="flex-1 px-4 py-2 border rounded-md focus:ring-2 focus:ring-blue-600"
-          disabled={loading}
+          className="flex-1 px-4 py-2 border rounded-lg"
         />
         <button
           onClick={createFolder}
           disabled={loading || !folderName.trim()}
-          className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 focus:ring-2 focus:ring-blue-600"
+          className="bg-blue-500 text-white px-4 py-2 rounded-lg disabled:opacity-50"
         >
           <FolderPlus className="inline w-4 h-4 mr-1" /> Create
         </button>
@@ -268,89 +261,51 @@ const FileManager: React.FC<FileManagerProps> = ({ onAuthChange }) => {
       {/* File Upload */}
       <div
         {...getRootProps()}
-        className={`border-2 border-dashed rounded-md p-6 text-center mb-6 ${
-          isDragActive ? 'border-blue-600 bg-blue-50' : 'border-gray-300'
-        } ${loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+        className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer ${
+          isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300'
+        }`}
       >
         <input {...getInputProps()} />
         <Upload className="mx-auto w-12 h-12 text-gray-400 mb-2" />
-        <p className="text-gray-600">Drag & drop files or folders here, or click to select</p>
+        <p>Drag & drop files here or click to browse</p>
       </div>
 
-      {/* Multi-Download Button */}
-      {selectedFiles.length > 0 && (
-        <button
-          onClick={handleMultipleDownload}
-          disabled={loading}
-          className="bg-indigo-600 text-white px-4 py-2 rounded-md mb-6 hover:bg-indigo-700 transition-colors disabled:opacity-50 focus:ring-2 focus:ring-indigo-600"
-        >
-          <DownloadCloud className="inline w-4 h-4 mr-1" /> Download Selected ({selectedFiles.length})
-        </button>
-      )}
-
       {/* Files List */}
-      <div className="mb-8">
-        <h2 className="text-xl font-semibold text-gray-800 mb-4">My Files</h2>
+      <div className="mt-6">
+        <h2 className="font-semibold mb-2">My Files</h2>
         {files.length === 0 ? (
           <p className="text-gray-500">No files found</p>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {files.map((file) => (
-              <div key={file.key} className="bg-white p-4 rounded-md shadow-sm flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={selectedFiles.includes(file.key)}
-                  onChange={() =>
-                    setSelectedFiles((prev) =>
-                      prev.includes(file.key) ? prev.filter((k) => k !== file.key) : [...prev, file.key]
-                    )
-                  }
-                  disabled={loading}
-                  className="h-4 w-4"
-                />
-                <span className="text-gray-800 flex-1">{file.key.split('/').pop()}</span>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleDownload(file.key)}
-                    disabled={loading}
-                    className="bg-blue-600 text-white p-2 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 focus:ring-2 focus:ring-blue-600"
-                  >
-                    <Download className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => moveToBin(file.key)}
-                    disabled={loading}
-                    className="bg-red-600 text-white p-2 rounded-md hover:bg-red-700 transition-colors disabled:opacity-50 focus:ring-2 focus:ring-red-600"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
+          files.map((file) => (
+            <div key={file} className="flex justify-between items-center bg-white p-2 border rounded mb-1">
+              <span>{file}</span>
+              <div className="flex gap-2">
+                <button onClick={() => handleDownload(file)} className="bg-green-500 p-2 rounded text-white">
+                  <Download className="w-4 h-4" />
+                </button>
+                <button onClick={() => moveToBin(file)} className="bg-red-500 p-2 rounded text-white">
+                  <Trash2 className="w-4 h-4" />
+                </button>
               </div>
-            ))}
-          </div>
+            </div>
+          ))
         )}
       </div>
 
       {/* Bin */}
-      <div>
-        <h2 className="text-xl font-semibold text-gray-800 mb-4">Recycle Bin</h2>
+      <div className="mt-8">
+        <h2 className="font-semibold mb-2">Recycle Bin</h2>
         {binFiles.length === 0 ? (
           <p className="text-gray-500">Bin is empty</p>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {binFiles.map((file) => (
-              <div key={file.key} className="bg-white p-4 rounded-md shadow-sm flex items-center gap-2">
-                <span className="text-gray-800 flex-1">{file.key.split('/').pop()}</span>
-                <button
-                  onClick={() => restoreFromBin(file.key)}
-                  disabled={loading}
-                  className="bg-yellow-500 text-white p-2 rounded-md hover:bg-yellow-600 transition-colors disabled:opacity-50 focus:ring-2 focus:ring-yellow-500"
-                >
-                  <RotateCcw className="w-4 h-4" />
-                </button>
-              </div>
-            ))}
-          </div>
+          binFiles.map((file) => (
+            <div key={file} className="flex justify-between items-center bg-white p-2 border rounded mb-1">
+              <span>{file}</span>
+              <button onClick={() => restoreFromBin(file)} className="bg-yellow-500 p-2 rounded text-white">
+                <RotateCcw className="w-4 h-4" />
+              </button>
+            </div>
+          ))
         )}
       </div>
     </div>
