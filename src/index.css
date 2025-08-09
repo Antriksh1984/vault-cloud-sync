@@ -2,41 +2,51 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
-All colors MUST be HSL.
-*/
+/* CloudVault Design System - Professional cloud storage interface */
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
+    /* Background colors */
+    --background: 210 20% 98%;
     --foreground: 222.2 84% 4.9%;
 
+    /* Card colors */
     --card: 0 0% 100%;
     --card-foreground: 222.2 84% 4.9%;
 
+    /* Popover colors */
     --popover: 0 0% 100%;
     --popover-foreground: 222.2 84% 4.9%;
 
-    --primary: 222.2 47.4% 11.2%;
+    /* CloudVault brand colors */
+    --primary: 217 91% 60%; /* Blue #2563EB */
     --primary-foreground: 210 40% 98%;
 
     --secondary: 210 40% 96.1%;
     --secondary-foreground: 222.2 47.4% 11.2%;
 
+    /* Action colors */
+    --success: 142 71% 45%; /* Green #16A34A */
+    --success-foreground: 210 40% 98%;
+
+    --warning: 38 92% 50%; /* Yellow #FBBF24 */
+    --warning-foreground: 222.2 84% 4.9%;
+
+    --destructive: 0 84% 60%; /* Red #DC2626 */
+    --destructive-foreground: 210 40% 98%;
+
+    --accent: 244 58% 51%; /* Indigo #4F46E5 */
+    --accent-foreground: 210 40% 98%;
+
+    /* Neutral colors */
     --muted: 210 40% 96.1%;
     --muted-foreground: 215.4 16.3% 46.9%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-
     --border: 214.3 31.8% 91.4%;
     --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    --ring: 217 91% 60%;
 
-    --radius: 0.5rem;
+    --radius: 0.75rem;
 
     --sidebar-background: 0 0% 98%;
 
@@ -100,6 +110,6 @@ All colors MUST be HSL.
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-inter;
   }
 }
